@@ -1,7 +1,7 @@
 const ForkTsCheckerWebpackPlugin = require('fork-ts-checker-webpack-plugin');
 const path = require('path');
 const ROOT_PATH = path.resolve(__dirname, '..');
-const CONFIG_PATH = path.resolve(ROOT_PATH, 'tsconfig.test.json');
+const TS_CONFIG_PATH = path.join(ROOT_PATH, 'tsconfig', 'test.json');
 
 module.exports = {
     devtool: 'inline-source-map',
@@ -17,14 +17,13 @@ module.exports = {
             loader: 'ts-loader',
             options: {
                 transpileOnly: true,
-                configFile: CONFIG_PATH,
-                context: ROOT_PATH,
+                configFile: TS_CONFIG_PATH,
             },
             exclude: /node_modules/
         }]
     },
 
     plugins: [
-        new ForkTsCheckerWebpackPlugin({ tsconfig: CONFIG_PATH }),
+        new ForkTsCheckerWebpackPlugin({ tsconfig: TS_CONFIG_PATH }),
     ]
 };

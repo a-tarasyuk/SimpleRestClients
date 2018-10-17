@@ -3,28 +3,34 @@
   "version": "0.2.5",
   "description": "A library of components for accessing RESTful services with javascript/typescript.",
   "author": "David de Regt <David.de.Regt@microsoft.com>",
+  "module": "dist-es2015/SimpleRestClients.js",
+  "main": "dist-cjs/SimpleRestClients.js",
   "scripts": {
-    "prepare": "tsc",
-    "clean": "rimraf dist",
-    "build": "npm run tslint && tsc",
-    "tslint": "tslint --project tsconfig.json -r tslint.json --fix || true",
-    "test": "npm run clean && karma start --singleRun",
-    "test:watch": "npm run clean && karma start",
-    "test:browser": "npm run clean && karma start --browsers=Chrome --single-run=false --auto-watch"
+    "prepare": "npm run build",
+    "clean": "rimraf dist-*",
+    "build:types": "tsc -p tsconfig/types.json",
+    "build:es2015": "tsc -p tsconfig.json",
+    "build:cjs": "tsc -p tsconfig/cjs.json",
+    "build": "run-s clean tslint build:*",
+    "karma:single-run": "karma start --singleRun",
+    "karma:watch": "karma start",
+    "test": "run-s clean karma:single-run",
+    "test:watch": "run-s clean karma:watch",
+    "tslint": "tslint -p tsconfig.json -r tslint.json --fix || true"
   },
   "dependencies": {
     "@types/lodash": "^4.14.110",
     "assert": "^1.4.1",
-    "lodash": "^4.17.0",
+    "lodash": "^4.17.11",
     "synctasks": "^0.3.3"
   },
   "devDependencies": {
     "@types/faker": "4.1.4",
     "@types/jasmine": "2.8.9",
     "@types/jasmine-ajax": "3.1.38",
-    "@types/node": "10.11.4",
+    "@types/node": "10.12.0",
     "faker": "4.1.0",
-    "fork-ts-checker-webpack-plugin": "0.4.9",
+    "fork-ts-checker-webpack-plugin": "0.4.10",
     "jasmine": "3.2.0",
     "jasmine-core": "3.2.1",
     "karma": "3.0.0",
@@ -35,28 +41,31 @@
     "karma-sourcemap-loader": "0.3.7",
     "karma-spec-reporter": "0.0.32",
     "karma-webpack": "4.0.0-beta.0",
+    "npm-run-all": "4.1.3",
     "rimraf": "2.6.2",
-    "ts-loader": "5.2.1",
+    "ts-loader": "5.2.2",
     "tslint": "5.11.0",
     "tslint-microsoft-contrib": "5.2.1",
-    "typescript": "3.1.1",
+    "typescript": "3.1.3",
     "webpack": "4.20.2"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/Microsoft/SimpleRestClients"
   },
-  "main": "index.js",
   "bugs": {
     "url": "https://github.com/Microsoft/SimpleRestClients/issues"
   },
+  "homepage": "https://github.com/Microsoft/SimpleRestClients#readme",
   "keywords": [
     "simplerestclient",
     "rest",
     "restclient",
     "xmlhttprequest",
-    "superagent"
+    "superagent",
+    "ajax",
+    "http"
   ],
   "license": "MIT",
-  "types": "dist/SimpleRestClients.d.ts"
+  "types": "dist-types/SimpleRestClients.d.ts"
 }

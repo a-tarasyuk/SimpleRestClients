@@ -50,7 +50,7 @@ export class GenericRestClient {
         if (objToPost) {
             options.sendData = objToPost;
         }
-        
+
         if (options.eTag) {
             if (!options.augmentHeaders) {
                 options.augmentHeaders = {};
@@ -64,7 +64,7 @@ export class GenericRestClient {
 
         const finalUrl = options.excludeEndpointUrl ? apiPath : this._endpointUrl + apiPath;
 
-        return new SimpleWebRequest<T, ApiCallOptions>(action, finalUrl, options, () => this._getHeaders(options), 
+        return new SimpleWebRequest<T, ApiCallOptions>(action, finalUrl, options, () => this._getHeaders(options),
                 () => this._blockRequestUntil(options))
             .start()
             .then(response => {
