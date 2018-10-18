@@ -50,7 +50,7 @@ export class GenericRestClient {
         if (objToPost) {
             options.sendData = objToPost;
         }
-        
+
         if (options.eTag) {
             if (!options.augmentHeaders) {
                 options.augmentHeaders = {};

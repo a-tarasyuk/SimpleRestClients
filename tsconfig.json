@@ -3,15 +3,15 @@
         "forceConsistentCasingInFileNames": true,
         "noImplicitReturns": true,
         "strictNullChecks": true,
-        "noImplicitAny": true,
+        "moduleResolution": "node",
         "noImplicitThis": true,
         "noUnusedLocals": true,
+        "declarationDir": "dist/types",
         "declaration": true,
         "noResolve": false,
-        "module": "commonjs",
-        "target": "es5",
-        "outDir": "dist",
-        "lib": ["dom", "es5", "es2015"]
+        "module": "es2015",
+        "target": "es2015",
+        "lib": ["dom", "es5", "es2015", "es2016.array.include"]
     },
 
     "include": [

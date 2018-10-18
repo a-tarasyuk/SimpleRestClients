@@ -91,7 +91,7 @@ describe('SimpleWebRequest', () => {
         };
         const method = 'GET';
         const url = faker.internet.url();
-        const error = `Don't set Accept with options.headers -- use it with the options.acceptType property`;
+        const error = `[simplerestclients] Don't set Accept with options.headers -- use it with the options.acceptType property`;
         const request = new SimpleWebRequest<string>(url, method, {}, () => headers);
 
         expect(() => request.start()).toThrowError(error);
@@ -106,7 +106,7 @@ describe('SimpleWebRequest', () => {
         };
         const method = 'GET';
         const url = faker.internet.url();
-        const error = `Don't set Content-Type with options.headers -- use it with the options.contentType property`;
+        const error = `[simplerestclients] Don't set Content-Type with options.headers -- use it with the options.contentType property`;
         const request = new SimpleWebRequest<string>(url, method, {}, () => headers);
 
         expect(() => request.start()).toThrowError(error);

@@ -1,50 +1,34 @@
-const webpack = require('./webpack.test');
+const rollupPreprocessor = require('./rollup.test');
 
 module.exports = config => (
     config.set({
         basePath: '',
         frameworks: ['jasmine-ajax', 'jasmine'],
         reporters: ['spec', 'kjhtml'],
-        browsers: [
-            process.env.TRAVIS
-                ? 'ChromeHeadlessNoSandbox'
-                : 'Chrome',
-        ],
         plugins: [
             'karma-jasmine-html-reporter',
-            'karma-sourcemap-loader',
+            'karma-rollup-preprocessor',
             'karma-chrome-launcher',
             'karma-spec-reporter',
             'karma-jasmine-ajax',
             'karma-jasmine',
-            'karma-webpack',
         ],
 
         customLaunchers: {
-            ChromeHeadlessNoSandbox: {
-                base: 'ChromeHeadless',
-                flags: ['--no-sandbox'],
-            }
+            ChromeHeadlessNoSandbox: { base: 'ChromeHeadless', flags: ['--no-sandbox'] },
         },
 
         preprocessors: {
-            './karma/karma.entry.js': ['webpack', 'sourcemap'],
+            'test/**/*.spec.ts': ['rollup'],
+            'src/**/*.spec.ts': ['rollup'],
         },
 
-        files: [
-            { pattern: './karma/karma.entry.js', watched: false },
-        ],
-
+        files: [{ pattern: 'test/**/*.spec.ts', watched: true, included: true }],
         logLevel: config.LOG_INFO,
         colors: true,
         mime: {
             'text/x-typescript': ['ts'],
         },
-
-        webpack,
-
-        webpackMiddleware: {
-            stats: 'errors-only',
-        }
+        rollupPreprocessor,
     })
 );

@@ -1,8 +1,8 @@
+import * as SyncTasks from 'synctasks';
 import * as faker from 'faker';
 import { ErrorHandlingType, SimpleWebRequestBase, WebErrorResponse } from '../src/SimpleWebRequest';
 import { GenericRestClient, ApiCallOptions } from '../src/GenericRestClient';
 import { DETAILED_RESPONSE, REQUEST_OPTIONS } from './helpers';
-import * as SyncTasks from 'synctasks';
 
 class RestClient extends GenericRestClient { }
 const BASE_URL = faker.internet.url();

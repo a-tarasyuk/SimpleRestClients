@@ -7,14 +7,15 @@
  */
 
 import * as _ from 'lodash';
-import * as assert from 'assert';
 import * as SyncTasks from 'synctasks';
-
 import { ExponentialTime } from './ExponentialTime';
+import { invariant } from './invariant';
 
-export interface Headers {
-    [header: string]: string;
+interface Dictionary<T = any> {
+    [key: string]: T;
 }
+
+export interface Headers extends Dictionary<string> {}
 
 export interface WebTransportResponseBase {
     url: string;
@@ -163,7 +164,7 @@ export function DefaultErrorHandler(webRequest: SimpleWebRequestBase, errResp: W
 }
 
 // Note: The ordering of this enum is used for detection logic
-const enum FeatureSupportStatus {
+enum FeatureSupportStatus {
     Unknown,
     Detecting,
     NotSupported,
@@ -246,8 +247,8 @@ export abstract class SimpleWebRequestBase<TOptions extends WebRequestOptions = 
     protected _assertAndClean(expression: any, message: string): void {
         if (!expression) {
             this._removeFromQueue();
-            console.error(message);
-            assert.ok(expression, message);
+            console.error(`[simplerestclients] ${ message }`);
+            invariant(expression, message);
         }
     }
 
@@ -395,7 +396,7 @@ export abstract class SimpleWebRequestBase<TOptions extends WebRequestOptions = 
 
         const nextHeaders = this.getRequestHeaders();
         // check/process headers
-        let headersCheck: _.Dictionary<boolean> = {};
+        let headersCheck: Dictionary<boolean> = {};
         _.forEach(nextHeaders, (val, key) => {
             const headerLower = key.toLowerCase();
             if (headerLower === 'content-type') {
@@ -452,7 +453,7 @@ export abstract class SimpleWebRequestBase<TOptions extends WebRequestOptions = 
             }
         } else if (isFormContentType(contentType)) {
             if (!_.isString(sendData) && _.isObject(sendData)) {
-                const params = _.map(sendData as _.Dictionary<any>, (val, key) =>
+                const params = _.map(sendData as Dictionary<any>, (val, key) =>
                     encodeURIComponent(key) + (val ? '=' + encodeURIComponent(val.toString()) : ''));
                 body = params.join('&');
             }
@@ -460,11 +461,11 @@ export abstract class SimpleWebRequestBase<TOptions extends WebRequestOptions = 
             if (_.isObject(sendData)) {
                 // Note: This only works for IE10 and above.
                 body = new FormData();
-                _.forEach(sendData as _.Dictionary<any>, (val, key) => {
+                _.forEach(sendData as Dictionary<any>, (val, key) => {
                     (body as FormData).append(key, val);
                 });
             } else {
-                assert.ok(false, 'contentType multipart/form-data must include an object as sendData');
+                invariant(false, 'contentType multipart/form-data must include an object as sendData');
             }
         }
 
@@ -536,7 +537,7 @@ export abstract class SimpleWebRequestBase<TOptions extends WebRequestOptions = 
 
     resumeRetrying(): void {
         if (!this._paused) {
-            assert.ok(false, 'resumeRetrying() called but not paused!');
+            invariant(false, 'resumeRetrying() called but not paused!');
             return;
         }
 
@@ -606,7 +607,7 @@ export class SimpleWebRequest<TBody, TOptions extends WebRequestOptions = WebReq
 
     abort(): void {
         if (this._aborted) {
-            assert.ok(false, 'Already aborted ' + this._action + ' request to ' + this._url);
+            invariant(false, 'Already aborted ' + this._action + ' request to ' + this._url);
             return;
         }
 
@@ -623,7 +624,7 @@ export class SimpleWebRequest<TBody, TOptions extends WebRequestOptions = WebReq
         }
 
         if (!this._deferred) {
-            assert.ok(false, 'Haven\'t even fired start() yet -- can\'t abort');
+            invariant(false, 'Haven\'t even fired start() yet -- can\'t abort');
             return;
         }
 
@@ -638,7 +639,7 @@ export class SimpleWebRequest<TBody, TOptions extends WebRequestOptions = WebReq
 
     start(): SyncTasks.Promise<WebResponse<TBody, TOptions>> {
         if (this._deferred) {
-            assert.ok(false, 'WebRequest already started');
+            invariant(false, 'WebRequest already started');
             return SyncTasks.Rejected('WebRequest already started');
         }
 
@@ -659,7 +660,7 @@ export class SimpleWebRequest<TBody, TOptions extends WebRequestOptions = WebReq
             // Unfortunately, this assertion fires frequently in the Safari browser, presumably due to a non-standard
             // XHR implementation, so we need to comment it out.
             // This also might get hit during browser feature detection process
-            //assert.ok(this._aborted || this._timedOut, 'Double-finished XMLHttpRequest');
+            // invariant(this._aborted || this._timedOut, 'Double-finished XMLHttpRequest');
             return;
         }
 

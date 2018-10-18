@@ -1,0 +1,11 @@
+{
+  "presets": [
+    ["@babel/env", { "targets": { "ie": 10 }, "modules": false }],
+    "@babel/typescript"
+  ],
+  "plugins": [
+    "babel-plugin-lodash",
+    "@babel/proposal-class-properties",
+    "@babel/proposal-object-rest-spread"
+  ]
+}

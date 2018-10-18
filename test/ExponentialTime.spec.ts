@@ -92,12 +92,12 @@ describe('ExponentialTime', () => {
     });
 
     it('checks correct initial values', () => {
-        expect(() => new ExponentialTime(0, 0)).toThrowError('Initial delay must be positive');
-        expect(() => new ExponentialTime(INITIAL_TIME, 0)).toThrowError('Delay upper bound must be positive');
+        expect(() => new ExponentialTime(0, 0)).toThrowError('[simplerestclients] Initial delay must be positive');
+        expect(() => new ExponentialTime(INITIAL_TIME, 0)).toThrowError('[simplerestclients] Delay upper bound must be positive');
 
         expect(() => new ExponentialTime(INITIAL_TIME, MAX_TIME, -1))
-            .toThrowError('Ratio must be non-negative');
+            .toThrowError('[simplerestclients] Ratio must be non-negative');
         expect(() => new ExponentialTime(INITIAL_TIME, MAX_TIME, DEFAULT_TIME_JITTER, -1))
-            .toThrowError('Jitter factor must be non-negative');
+            .toThrowError('[simplerestclients] Jitter factor must be non-negative');
     });
 });
