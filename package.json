@@ -7,6 +7,7 @@
   "main": "dist-cjs/SimpleRestClients.js",
   "scripts": {
     "prepare": "npm run build",
+    "size": "size-limit",
     "clean": "rimraf dist-*",
     "build:types": "tsc -p tsconfig/types.json",
     "build:es2015": "tsc -p tsconfig.json",
@@ -43,12 +44,21 @@
     "karma-webpack": "4.0.0-beta.0",
     "npm-run-all": "4.1.3",
     "rimraf": "2.6.2",
+    "size-limit": "^0.20.1",
     "ts-loader": "5.2.2",
     "tslint": "5.11.0",
     "tslint-microsoft-contrib": "5.2.1",
     "typescript": "3.1.3",
     "webpack": "4.20.2"
   },
+  "size-limit": [
+    {
+      "path": "dist-cjs/SimpleRestClients.js"
+    },
+    {
+      "path": "dist-es2015/SimpleRestClients.js"
+    }
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/Microsoft/SimpleRestClients"
