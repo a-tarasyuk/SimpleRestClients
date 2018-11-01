@@ -6,21 +6,31 @@
  * Simple client for issuing web requests.
  */
 
-import * as _ from 'lodash';
-import * as assert from 'assert';
 import * as SyncTasks from 'synctasks';
+import assert from 'simple-assert-ok';
+import attempt from 'lodash/attempt';
+import cloneDeep from 'lodash/cloneDeep';
+import defaults from 'lodash/defaults';
+import extend from 'lodash/extend';
+import findIndex from 'lodash/findIndex';
+import includes from 'lodash/includes';
+import isObject from 'lodash/isObject';
+import remove from 'lodash/remove';
 
 import { ExponentialTime } from './ExponentialTime';
 
-export interface Headers {
-    [header: string]: string;
+export interface Dictionary<T = string> {
+    [key: string]: T;
 }
+
+export interface Headers extends Dictionary {}
+export interface Params extends Dictionary<any> {}
 
 export interface WebTransportResponseBase {
     url: string;
     method: string;
     statusCode: number;
-    statusText: string|undefined;
+    statusText: string | undefined;
     headers: Headers;
 }
 
@@ -81,7 +91,7 @@ export interface NativeBlobFileData {
 }
 
 export interface NativeFileData {
-    file: NativeBlobFileData|File;
+    file: NativeBlobFileData | File;
 }
 
 export interface XMLHttpRequestProgressEvent extends ProgressEvent {
@@ -94,7 +104,7 @@ export interface XMLHttpRequestProgressEvent extends ProgressEvent {
     totalSize: number;
 }
 
-export type SendDataType = Object | string | NativeFileData;
+export type SendDataType = Params | string | NativeFileData;
 
 export interface WebRequestOptions {
     withCredentials?: boolean;
@@ -119,17 +129,9 @@ export interface WebRequestOptions {
     augmentErrorResponse?: (resp: WebErrorResponse) => void;
 }
 
-function isJsonContentType(ct: string) {
-    return ct && ct.indexOf('application/json') === 0;
-}
-
-function isFormContentType(ct: string) {
-    return ct && ct.indexOf('application/x-www-form-urlencoded') === 0;
-}
-
-function isFormDataContentType(ct: string) {
-    return ct && ct.indexOf('multipart/form-data') === 0;
-}
+const isJsonContentType = (ct: string) => ct && ct.indexOf('application/json') === 0;
+const isFormContentType = (ct: string) => ct && ct.indexOf('application/x-www-form-urlencoded') === 0;
+const isFormDataContentType = (ct: string) => ct && ct.indexOf('multipart/form-data') === 0;
 
 export const DefaultOptions: WebRequestOptions = {
     priority: WebRequestPriority.Normal
@@ -171,22 +173,99 @@ const enum FeatureSupportStatus {
 }
 
 // List of pending requests, sorted from most important to least important (numerically descending)
-let requestQueue: SimpleWebRequestBase[] = [];
+const requestQueue: SimpleWebRequestBase[] = [];
 
 // List of requests blocked on _blockUNtil promises
-let blockedList: SimpleWebRequestBase[] = [];
+const blockedList: SimpleWebRequestBase[] = [];
 
 // List of executing (non-finished) requests -- only to keep track of number of requests to compare to the max
-let executingList: SimpleWebRequestBase[] = [];
+const executingList: SimpleWebRequestBase[] = [];
 
 // Feature flag checkers for whether the current environment supports various types of XMLHttpRequest features
 let onLoadErrorSupportStatus = FeatureSupportStatus.Unknown;
 let timeoutSupportStatus = FeatureSupportStatus.Unknown;
 
 export abstract class SimpleWebRequestBase<TOptions extends WebRequestOptions = WebRequestOptions> {
-    protected _xhr: XMLHttpRequest|undefined;
-    protected _xhrRequestHeaders: Headers|undefined;
-    protected _requestTimeoutTimer: number|undefined;
+
+    static mapContentType(contentType: string): string {
+        if (contentType === 'json') {
+            return 'application/json';
+        }
+
+        if (contentType === 'form') {
+            return 'application/x-www-form-urlencoded';
+        }
+
+        return contentType;
+    }
+
+    static mapBody(sendData: SendDataType, contentType: string): BodyInit {
+        if (!isObject(sendData)) {
+            assert(!isFormDataContentType(contentType), 'contentType multipart/form-data must include an object as sendData');
+            return sendData as BodyInit;
+        }
+
+        if (isJsonContentType(contentType)) {
+            return JSON.stringify(sendData);
+        }
+
+        const params = sendData as Params;
+        if (isFormContentType(contentType)) {
+            return Object.keys(params)
+                .map((param) => encodeURIComponent(param) + (params[param] ? '=' + encodeURIComponent(params[param].toString()) : ''))
+                .join('&');
+        }
+
+        if (isFormDataContentType(contentType)) {
+            const formData = new FormData();
+            Object.keys(params).forEach((param) => formData.append(param, params[param]));
+            return formData;
+        }
+
+        return sendData as BodyInit;
+    }
+
+    protected static checkQueueProcessing() {
+        while (requestQueue.length > 0 && executingList.length < SimpleWebRequestOptions.MaxSimultaneousRequests) {
+            const req = requestQueue.shift()!;
+            blockedList.push(req);
+
+            const blockPromise = (req._blockRequestUntil && req._blockRequestUntil()) || SyncTasks.Resolved();
+            blockPromise
+                .finally(() => remove(blockedList, req))
+                .then(() => {
+                    if (executingList.length < SimpleWebRequestOptions.MaxSimultaneousRequests && !req._aborted) {
+                        executingList.push(req);
+                        req._fire();
+                    } else {
+                        req._enqueue();
+                    }
+                }, err => {
+                    // fail the request if the block promise is rejected
+                    req._respond(`_blockRequestUntil rejected: ${ err }`);
+                });
+        }
+    }
+
+    private static _getResponseType(acceptType: string): XMLHttpRequestResponseType {
+        if (acceptType === 'blob') {
+            return 'arraybuffer';
+        }
+
+        if (acceptType === 'text/xml' || acceptType === 'application/xml') {
+            return 'document';
+        }
+
+        if (acceptType === 'text/plain') {
+            return 'text';
+        }
+
+        return 'json';
+    }
+
+    protected _xhr: XMLHttpRequest | undefined;
+    protected _xhrRequestHeaders: Headers | undefined;
+    protected _requestTimeoutTimer: number | undefined;
     protected _options: TOptions;
 
     protected _aborted = false;
@@ -199,57 +278,140 @@ export abstract class SimpleWebRequestBase<TOptions extends WebRequestOptions = 
     // 2. Safari seems to have a bug where sometimes it double-resolves happily-completed xmlhttprequests
     protected _finishHandled = false;
 
-    protected _retryTimer: number|undefined;
+    protected _retryTimer: number | undefined;
     protected _retryExponentialTime = new ExponentialTime(1000, 300000);
 
     constructor(protected _action: string,
-            protected _url: string, options: TOptions,
-            protected _getHeaders?: () => Headers,
-            protected _blockRequestUntil?: () => SyncTasks.Promise<void>|undefined) {
-        this._options = _.defaults(options, DefaultOptions);
+                protected _url: string, options: TOptions,
+                protected _getHeaders?: () => Headers,
+                protected _blockRequestUntil?: () => SyncTasks.Promise<void> | undefined) {
+        this._options = defaults(options, DefaultOptions);
     }
 
     getPriority(): WebRequestPriority {
         return this._options.priority || WebRequestPriority.DontCare;
     }
 
-    abstract abort(): void;
+    setUrl(newUrl: string): void {
+        this._url = newUrl;
+    }
 
-    protected static checkQueueProcessing() {
-        while (requestQueue.length > 0 && executingList.length < SimpleWebRequestOptions.MaxSimultaneousRequests) {
-            const req = requestQueue.shift()!!!;
-            blockedList.push(req);
-            const blockPromise = (req._blockRequestUntil && req._blockRequestUntil()) || SyncTasks.Resolved();
-            blockPromise.finally(() => {
-                _.remove(blockedList, req);
-            }).then(() => {
-                if (executingList.length < SimpleWebRequestOptions.MaxSimultaneousRequests && !req._aborted) {
-                    executingList.push(req);
-                    req._fire();
-                } else {
-                    req._enqueue();
-                }
-            }, err => {
-                // fail the request if the block promise is rejected
-                req._respond('_blockRequestUntil rejected: ' + err);
-            });
+    setHeader(key: string, val: string | undefined): void {
+        if (!this._options.augmentHeaders) {
+            this._options.augmentHeaders = {};
+        }
+
+        if (val) {
+            this._options.augmentHeaders[key] = val;
+        } else {
+            delete this._options.augmentHeaders[key];
         }
     }
+
+    getRequestHeaders(): Headers {
+        let headers: Headers = {};
+
+        if (this._getHeaders && !this._options.overrideGetHeaders && !this._options.headers) {
+            headers = extend(headers, this._getHeaders());
+        }
+
+        if (this._options.overrideGetHeaders) {
+            headers = extend(headers, this._options.overrideGetHeaders);
+        }
+
+        if (this._options.headers) {
+            headers = extend(headers, this._options.headers);
+        }
+
+        if (this._options.augmentHeaders) {
+            headers = extend(headers, this._options.augmentHeaders);
+        }
+
+        return headers;
+    }
+
+    getOptions(): Readonly<WebRequestOptions> {
+        return cloneDeep(this._options);
+    }
+
+    setPriority(newPriority: WebRequestPriority): void {
+        if (this._options.priority === newPriority) {
+            return;
+        }
+
+        this._options.priority = newPriority;
+
+        if (this._paused) {
+            return;
+        }
+
+        if (this._xhr) {
+            // Already fired -- wait for it to retry for the new priority to matter
+            return;
+        }
+
+        // Remove and re-queue
+        remove(requestQueue, item => item === this);
+        this._enqueue();
+    }
+
+    resumeRetrying(): void {
+        assert(!!this._paused, 'resumeRetrying() called but not paused!');
+
+        this._paused = false;
+        this._enqueue();
+    }
+
+    abstract abort(): void;
 
     protected _removeFromQueue(): void {
         // Only pull from request queue and executing queue here - pulling from the blocked queue can result in requests
         // being queued up multiple times if _respond fires more than once (it shouldn't, but does happen in the wild)
-        _.remove(executingList, this);
-        _.remove(requestQueue, this);
+        remove(executingList, this);
+        remove(requestQueue, this);
     }
 
     protected _assertAndClean(expression: any, message: string): void {
         if (!expression) {
             this._removeFromQueue();
             console.error(message);
-            assert.ok(expression, message);
+            assert(expression, message);
         }
     }
+
+    protected _enqueue(): void {
+        // It's possible for a request to be canceled before it's queued since onCancel fires synchronously and we set up the listener
+        // before queueing for execution
+        // An aborted request should never be queued for execution
+        if (this._aborted) {
+            return;
+        }
+
+        // Check if the current queues, if the request is already in there, nothing to enqueue
+        if (includes(executingList, this) || includes(blockedList, this) || includes(requestQueue, this)) {
+            return;
+        }
+
+        // Throw it on the queue
+        const index = findIndex(requestQueue, request =>
+            // find a request with the same priority, but newer
+            (request.getPriority() === this.getPriority() && request._created > this._created) ||
+            // or a request with lower priority
+            (request.getPriority() < this.getPriority()));
+
+        if (index > -1) {
+            // add me before the found request
+            requestQueue.splice(index, 0, this);
+        } else {
+            // add me at the end
+            requestQueue.push(this);
+        }
+
+        // See if it's time to execute it
+        SimpleWebRequestBase.checkQueueProcessing();
+    }
+
+    protected abstract _respond(errorStatusText?: string): void;
 
     // TSLint thinks that this function is unused.  Silly tslint.
     // tslint:disable-next-line
@@ -258,10 +420,10 @@ export abstract class SimpleWebRequestBase<TOptions extends WebRequestOptions = 
         this._xhrRequestHeaders = {};
 
         // xhr.open() can throw an exception for a CSP violation.
-        const openError = _.attempt(() => {
+        const openError = attempt(() => {
             // Apparently you're supposed to open the connection before adding events to it.  If you don't, the node.js implementation
             // of XHR actually calls this.abort() at the start of open()...  Bad implementations, hooray.
-            this._xhr!!!.open(this._action, this._url, true);
+            this._xhr!.open(this._action, this._url, true);
         });
 
         if (openError) {
@@ -379,7 +541,6 @@ export abstract class SimpleWebRequestBase<TOptions extends WebRequestOptions = 
             // If the browser cancels us (page navigation or whatever), it sometimes calls both the readystatechange and this,
             // so make sure we know that this is an abort.
             this._aborted = true;
-
             this._respond('Aborted');
         };
 
@@ -389,10 +550,7 @@ export abstract class SimpleWebRequestBase<TOptions extends WebRequestOptions = 
 
         const acceptType = this._options.acceptType || 'json';
         const responseType = SimpleWebRequestBase._getResponseType(acceptType);
-
-        const responseTypeError = _.attempt(() => {
-            this._xhr!!!.responseType = responseType;
-        });
+        const responseTypeError = attempt(() => this._xhr!.responseType = responseType);
 
         if (responseTypeError) {
             // WebKit added support for the json responseType value on 09/03/2013
@@ -408,31 +566,38 @@ export abstract class SimpleWebRequestBase<TOptions extends WebRequestOptions = 
         }
 
         this._setRequestHeader('Accept', SimpleWebRequestBase.mapContentType(acceptType));
-
         this._xhr.withCredentials = !!this._options.withCredentials;
 
         const nextHeaders = this.getRequestHeaders();
         // check/process headers
-        let headersCheck: _.Dictionary<boolean> = {};
-        _.forEach(nextHeaders, (val, key) => {
-            const headerLower = key.toLowerCase();
-            if (headerLower === 'content-type') {
-                this._assertAndClean(false, 'Don\'t set Content-Type with options.headers -- use it with the options.contentType property');
-                return;
-            }
-            if (headerLower === 'accept') {
-                this._assertAndClean(false, 'Don\'t set Accept with options.headers -- use it with the options.acceptType property');
-                return;
-            }
-            this._assertAndClean(!headersCheck[headerLower], 'Setting duplicate header key: ' + headersCheck[headerLower] + ' and ' + key);
+        const headersCheck = new Map();
 
-            if (val === undefined || val === null) {
-                console.warn('Tried to set header "' + key + '" on request with "' + val + '" value, header will be dropped');
+        Object.keys(nextHeaders).forEach(header => {
+            const headerLower = header.toLowerCase();
+            const value = nextHeaders[header];
+
+            this._assertAndClean(
+                !(headerLower === 'content-type'),
+                `Don\'t set Content-Type with options.headers -- use it with the options.contentType property`
+            );
+
+            this._assertAndClean(
+                !(headerLower === 'accept'),
+                `Don\'t set Accept with options.headers -- use it with the options.acceptType property`
+            );
+
+            this._assertAndClean(
+                !headersCheck.get(headerLower),
+                `Setting duplicate header key: ${ headersCheck.get(headerLower) } and ${ header }`
+            );
+
+            if (value === undefined || value === null) {
+                console.warn(`Tried to set header "${ header }" on request with "${ value }" value, header will be dropped`);
                 return;
             }
 
-            headersCheck[headerLower] = true;
-            this._setRequestHeader(key, val);
+            headersCheck.set(headerLower, true);
+            this._setRequestHeader(header, value);
         });
 
         if (this._options.sendData) {
@@ -440,177 +605,16 @@ export abstract class SimpleWebRequestBase<TOptions extends WebRequestOptions = 
             this._setRequestHeader('Content-Type', contentType);
 
             const sendData = SimpleWebRequestBase.mapBody(this._options.sendData, contentType);
-
-            this._xhr.send(sendData as BodyInit);
+            this._xhr.send(sendData);
         } else {
             this._xhr.send();
         }
     }
 
     private _setRequestHeader(key: string, val: string): void {
-        this._xhr!!!.setRequestHeader(key, val);
-        this._xhrRequestHeaders!!![key] = val;
+        this._xhr!.setRequestHeader(key, val);
+        this._xhrRequestHeaders![key] = val;
     }
-
-    static mapContentType(contentType: string): string {
-        if (contentType === 'json') {
-            return 'application/json';
-        } else if (contentType === 'form') {
-            return 'application/x-www-form-urlencoded';
-        } else {
-            return contentType;
-        }
-    }
-
-    static mapBody(sendData: SendDataType, contentType: string): SendDataType {
-        let body = sendData;
-        if (isJsonContentType(contentType)) {
-            if (!_.isString(sendData)) {
-                body = JSON.stringify(sendData);
-            }
-        } else if (isFormContentType(contentType)) {
-            if (!_.isString(sendData) && _.isObject(sendData)) {
-                const params = _.map(sendData as _.Dictionary<any>, (val, key) =>
-                    encodeURIComponent(key) + (val ? '=' + encodeURIComponent(val.toString()) : ''));
-                body = params.join('&');
-            }
-        } else if (isFormDataContentType(contentType)) {
-            if (_.isObject(sendData)) {
-                // Note: This only works for IE10 and above.
-                body = new FormData();
-                _.forEach(sendData as _.Dictionary<any>, (val, key) => {
-                    (body as FormData).append(key, val);
-                });
-            } else {
-                assert.ok(false, 'contentType multipart/form-data must include an object as sendData');
-            }
-        }
-
-        return body;
-    }
-
-    setUrl(newUrl: string): void {
-        this._url = newUrl;
-    }
-
-    setHeader(key: string, val: string|undefined): void {
-        if (!this._options.augmentHeaders) {
-            this._options.augmentHeaders = {};
-        }
-
-        if (val) {
-            this._options.augmentHeaders[key] = val;
-        } else {
-            delete this._options.augmentHeaders[key];
-        }
-    }
-
-    getRequestHeaders(): Headers {
-        let headers: Headers = {};
-
-        if (this._getHeaders && !this._options.overrideGetHeaders && !this._options.headers) {
-            headers = _.extend(headers, this._getHeaders());
-        }
-
-        if (this._options.overrideGetHeaders) {
-            headers = _.extend(headers, this._options.overrideGetHeaders);
-        }
-
-        if (this._options.headers) {
-            headers = _.extend(headers, this._options.headers);
-        }
-
-        if (this._options.augmentHeaders) {
-            headers = _.extend(headers, this._options.augmentHeaders);
-        }
-
-        return headers;
-    }
-
-    getOptions(): Readonly<WebRequestOptions> {
-        return _.cloneDeep(this._options);
-    }
-
-    setPriority(newPriority: WebRequestPriority): void {
-        if (this._options.priority === newPriority) {
-            return;
-        }
-
-        this._options.priority = newPriority;
-
-        if (this._paused) {
-            return;
-        }
-
-        if (this._xhr) {
-            // Already fired -- wait for it to retry for the new priority to matter
-            return;
-        }
-
-        // Remove and re-queue
-        _.remove(requestQueue, item => item === this);
-        this._enqueue();
-    }
-
-    resumeRetrying(): void {
-        if (!this._paused) {
-            assert.ok(false, 'resumeRetrying() called but not paused!');
-            return;
-        }
-
-        this._paused = false;
-        this._enqueue();
-    }
-
-    protected _enqueue(): void {
-        // It's possible for a request to be canceled before it's queued since onCancel fires synchronously and we set up the listener
-        // before queueing for execution
-        // An aborted request should never be queued for execution
-        if (this._aborted) {
-            return;
-        }
-
-        // Check if the current queues, if the request is already in there, nothing to enqueue
-        if (_.includes(executingList, this) || _.includes(blockedList, this) || _.includes(requestQueue, this)) {
-            return;
-        }
-
-        // Throw it on the queue
-        const index = _.findIndex(requestQueue, request =>
-            // find a request with the same priority, but newer
-            (request.getPriority() === this.getPriority() && request._created > this._created) ||
-            // or a request with lower priority
-            (request.getPriority() < this.getPriority()));
-
-        if (index > -1) {
-            //add me before the found request
-            requestQueue.splice(index, 0, this);
-        } else {
-            //add me at the end
-            requestQueue.push(this);
-        }
-
-        // See if it's time to execute it
-        SimpleWebRequestBase.checkQueueProcessing();
-    }
-
-    private static _getResponseType(acceptType: string): XMLHttpRequestResponseType {
-        if (acceptType === 'blob') {
-            return 'arraybuffer';
-        }
-
-        if (acceptType === 'text/xml' || acceptType === 'application/xml') {
-            return 'document';
-        }
-
-        if (acceptType === 'text/plain') {
-            return 'text';
-        }
-
-        return 'json';
-    }
-
-    protected abstract _respond(errorStatusText?: string): void;
 }
 
 export class SimpleWebRequest<TBody, TOptions extends WebRequestOptions = WebRequestOptions> extends SimpleWebRequestBase<TOptions> {
@@ -618,13 +622,13 @@ export class SimpleWebRequest<TBody, TOptions extends WebRequestOptions = WebReq
     private _deferred: SyncTasks.Deferred<WebResponse<TBody, TOptions>>;
 
     constructor(action: string, url: string, options: TOptions, getHeaders?: () => Headers,
-            blockRequestUntil?: () => SyncTasks.Promise<void>|undefined) {
+                blockRequestUntil?: () => SyncTasks.Promise<void> | undefined) {
         super(action, url, options, getHeaders, blockRequestUntil);
     }
 
     abort(): void {
         if (this._aborted) {
-            assert.ok(false, 'Already aborted ' + this._action + ' request to ' + this._url);
+            assert(false, `Already aborted ${ this._action } request to ${ this._url }`);
             return;
         }
 
@@ -641,7 +645,7 @@ export class SimpleWebRequest<TBody, TOptions extends WebRequestOptions = WebReq
         }
 
         if (!this._deferred) {
-            assert.ok(false, 'Haven\'t even fired start() yet -- can\'t abort');
+            assert(false, `Haven\'t even fired start() yet -- can\'t abort`);
             return;
         }
 
@@ -656,7 +660,7 @@ export class SimpleWebRequest<TBody, TOptions extends WebRequestOptions = WebReq
 
     start(): SyncTasks.Promise<WebResponse<TBody, TOptions>> {
         if (this._deferred) {
-            assert.ok(false, 'WebRequest already started');
+            assert(false, 'WebRequest already started');
             return SyncTasks.Rejected('WebRequest already started');
         }
 
@@ -677,7 +681,7 @@ export class SimpleWebRequest<TBody, TOptions extends WebRequestOptions = WebReq
             // Unfortunately, this assertion fires frequently in the Safari browser, presumably due to a non-standard
             // XHR implementation, so we need to comment it out.
             // This also might get hit during browser feature detection process
-            //assert.ok(this._aborted || this._timedOut, 'Double-finished XMLHttpRequest');
+            // assert(this._aborted || this._timedOut, 'Double-finished XMLHttpRequest');
             return;
         }
 
@@ -696,7 +700,7 @@ export class SimpleWebRequest<TBody, TOptions extends WebRequestOptions = WebReq
         }
 
         let statusCode = 0;
-        let statusText: string|undefined;
+        let statusText: string | undefined;
         if (this._xhr) {
             try {
                 statusCode = this._xhr.status;
@@ -708,7 +712,7 @@ export class SimpleWebRequest<TBody, TOptions extends WebRequestOptions = WebReq
             statusText = errorStatusText || 'Browser Error - Possible CORS or Connectivity Issue';
         }
 
-        let headers: Headers = {};
+        const headers: Headers = {};
         let body: any;
 
         // Build the response info
@@ -739,7 +743,7 @@ export class SimpleWebRequest<TBody, TOptions extends WebRequestOptions = WebReq
 
             body = this._xhr.response;
             if (headers['content-type'] && isJsonContentType(headers['content-type'])) {
-                if (!body || !_.isObject(body)) {
+                if (!body || !isObject(body)) {
                     // Response can be null if the responseType does not match what the server actually sends
                     // https://developer.mozilla.org/en-US/docs/Web/API/XMLHttpRequest/responseType
 
@@ -759,25 +763,25 @@ export class SimpleWebRequest<TBody, TOptions extends WebRequestOptions = WebReq
                 method: this._action,
                 requestOptions: this._options,
                 requestHeaders: this._xhrRequestHeaders || {},
-                statusCode: statusCode,
-                statusText: statusText,
-                headers: headers,
-                body: body as TBody,
+                statusCode,
+                statusText,
+                headers,
+                body: body as TBody
             };
 
             this._deferred.resolve(resp);
         } else {
-            let errResp: WebErrorResponse<TOptions> = {
+            const errResp: WebErrorResponse<TOptions> = {
                 url: (this._xhr ? this._xhr.responseURL : undefined) || this._url,
                 method: this._action,
                 requestOptions: this._options,
                 requestHeaders: this._xhrRequestHeaders || {},
-                statusCode: statusCode,
-                statusText: statusText,
-                headers: headers,
-                body: body,
+                statusCode,
+                statusText,
+                headers,
+                body,
                 canceled: this._aborted,
-                timedOut: this._timedOut,
+                timedOut: this._timedOut
             };
 
             if (this._options.augmentErrorResponse) {
@@ -797,7 +801,7 @@ export class SimpleWebRequest<TBody, TOptions extends WebRequestOptions = WebReq
 
             if (retry) {
                 if (handleResponse === ErrorHandlingType.RetryCountedWithBackoff) {
-                    this._options.retries!!!--;
+                    this._options.retries!--;
                 }
 
                 if (this._requestTimeoutTimer) {
@@ -810,12 +814,12 @@ export class SimpleWebRequest<TBody, TOptions extends WebRequestOptions = WebReq
 
                 // Clear the XHR since we technically just haven't started again yet...
                 if (this._xhr) {
-                    this._xhr.onabort = null!!!;
-                    this._xhr.onerror = null!!!;
-                    this._xhr.onload = null!!!;
-                    this._xhr.onprogress = null!!!;
-                    this._xhr.onreadystatechange = null!!!;
-                    this._xhr.ontimeout = null!!!;
+                    this._xhr.onabort = null!;
+                    this._xhr.onerror = null!;
+                    this._xhr.onload = null!;
+                    this._xhr.onprogress = null!;
+                    this._xhr.onreadystatechange = null!;
+                    this._xhr.ontimeout = null!;
                     this._xhr = undefined;
 
                     this._xhrRequestHeaders = undefined;

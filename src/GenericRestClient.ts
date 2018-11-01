@@ -7,8 +7,9 @@
  */
 
 import * as SyncTasks from 'synctasks';
-import { defaults, isString } from 'lodash';
-import { WebRequestOptions, SimpleWebRequest, WebResponse, Headers } from './SimpleWebRequest';
+import defaults from 'lodash/defaults';
+
+import { Headers, WebRequestOptions, WebResponse, SimpleWebRequest } from './SimpleWebRequest';
 
 export type HttpAction = 'POST'|'GET'|'PUT'|'DELETE'|'PATCH';
 
@@ -30,64 +31,15 @@ export interface ETagResponse<T> {
 }
 
 export class GenericRestClient {
-
     protected _endpointUrl: string;
-
     protected _defaultOptions: ApiCallOptions = {
         excludeEndpointUrl: false,
         withCredentials: false,
-        retries: 0,
+        retries: 0
     };
 
     constructor(endpointUrl: string) {
         this._endpointUrl = endpointUrl;
-    }
-
-    protected _performApiCall<T>(apiPath: string, action: HttpAction, objToPost: any, givenOptions?: ApiCallOptions)
-            : SyncTasks.Promise<WebResponse<T, ApiCallOptions>> {
-
-        let options = defaults<ApiCallOptions, ApiCallOptions, ApiCallOptions>({}, givenOptions || {}, this._defaultOptions);
-        if (objToPost) {
-            options.sendData = objToPost;
-        }
-        
-        if (options.eTag) {
-            if (!options.augmentHeaders) {
-                options.augmentHeaders = {};
-            }
-            options.augmentHeaders['If-None-Match'] = options.eTag;
-        }
-
-        if (!options.contentType) {
-            options.contentType = isString(options.sendData) ? 'form' : 'json';
-        }
-
-        const finalUrl = options.excludeEndpointUrl ? apiPath : this._endpointUrl + apiPath;
-
-        return new SimpleWebRequest<T, ApiCallOptions>(action, finalUrl, options, () => this._getHeaders(options), 
-                () => this._blockRequestUntil(options))
-            .start()
-            .then(response => {
-                this._processSuccessResponse<T>(response);
-                return response;
-            });
-    }
-
-    protected _getHeaders(options: ApiCallOptions): Headers {
-        // Virtual function -- No-op by default
-        return {};
-    }
-
-    // Override (but make sure to call super and chain appropriately) this function if you want to add more blocking criteria.
-    // Also, this might be called multiple times to check if the conditions changed
-    protected _blockRequestUntil(options: ApiCallOptions): SyncTasks.Promise<void>|undefined {
-        // No-op by default
-        return undefined;
-    }
-
-    // Override this function to process any generic headers that come down with a successful response
-    protected _processSuccessResponse<T>(resp: WebResponse<T, ApiCallOptions>): void {
-        // No-op by default
     }
 
     performApiGet<T>(apiPath: string, options?: ApiCallOptions): SyncTasks.Promise<T> {
@@ -143,5 +95,52 @@ export class GenericRestClient {
     performApiDeleteDetailed<T>(apiPath: string, objToDelete: any, options?: ApiCallOptions)
             : SyncTasks.Promise<WebResponse<T, ApiCallOptions>> {
         return this._performApiCall<T>(apiPath, 'DELETE', objToDelete, options);
+    }
+
+    protected _performApiCall<T>(apiPath: string, action: HttpAction, objToPost: any, givenOptions?: ApiCallOptions)
+            : SyncTasks.Promise<WebResponse<T, ApiCallOptions>> {
+
+        const options = defaults<ApiCallOptions, ApiCallOptions, ApiCallOptions>({}, givenOptions || {}, this._defaultOptions);
+        if (objToPost) {
+            options.sendData = objToPost;
+        }
+
+        if (options.eTag) {
+            if (!options.augmentHeaders) {
+                options.augmentHeaders = {};
+            }
+            options.augmentHeaders['If-None-Match'] = options.eTag;
+        }
+
+        if (!options.contentType) {
+            options.contentType = typeof options.sendData === 'string' ? 'form' : 'json';
+        }
+
+        const finalUrl = options.excludeEndpointUrl ? apiPath : this._endpointUrl + apiPath;
+
+        return new SimpleWebRequest<T, ApiCallOptions>(action, finalUrl, options, () => this._getHeaders(options),
+                () => this._blockRequestUntil(options))
+            .start()
+            .then(response => {
+                this._processSuccessResponse<T>(response);
+                return response;
+            });
+    }
+
+    protected _getHeaders(options: ApiCallOptions): Headers {
+        // Virtual function -- No-op by default
+        return {};
+    }
+
+    // Override (but make sure to call super and chain appropriately) this function if you want to add more blocking criteria.
+    // Also, this might be called multiple times to check if the conditions changed
+    protected _blockRequestUntil(options: ApiCallOptions): SyncTasks.Promise<void> | undefined {
+        // No-op by default
+        return undefined;
+    }
+
+    // Override this function to process any generic headers that come down with a successful response
+    protected _processSuccessResponse<T>(resp: WebResponse<T, ApiCallOptions>): void {
+        // No-op by default
     }
 }

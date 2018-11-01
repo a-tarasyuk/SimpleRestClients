@@ -1,25 +1,27 @@
 {
-    "compilerOptions": {
-        "forceConsistentCasingInFileNames": true,
-        "noImplicitReturns": true,
-        "strictNullChecks": true,
-        "noImplicitAny": true,
-        "noImplicitThis": true,
-        "noUnusedLocals": true,
-        "declaration": true,
-        "noResolve": false,
-        "module": "commonjs",
-        "target": "es5",
-        "outDir": "dist",
-        "lib": ["dom", "es5", "es2015"]
-    },
+  "compilerOptions": {
+    "forceConsistentCasingInFileNames": true,
+    "allowSyntheticDefaultImports": true,
+    "noImplicitReturns": true,
+    "moduleResolution": "node",
+    "strictNullChecks": true,
+    "noImplicitThis": true,
+    "noUnusedLocals": true,
+    "noImplicitAny": true,
+    "declaration": true,
+    "noResolve": false,
+    "module": "es2015",
+    "target": "es5",
+    "outDir": "dist-es2015",
+    "lib": ["dom", "es5", "es2015"]
+  },
 
-    "include": [
-        "src/**/*"
-    ],
+  "include": [
+    "src/*"
+  ],
 
-    "exclude": [
-        "dist",
-        "node_modules"
-    ]
+  "exclude": [
+    "dist-*",
+    "node_modules"
+  ]
 }
