@@ -165,7 +165,7 @@ export function DefaultErrorHandler(webRequest: SimpleWebRequestBase, errResp: W
 }
 
 // Note: The ordering of this enum is used for detection logic
-const enum FeatureSupportStatus {
+enum FeatureSupportStatus {
     Unknown,
     Detecting,
     NotSupported,
