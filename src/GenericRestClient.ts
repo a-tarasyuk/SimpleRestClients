@@ -1,4 +1,4 @@
-﻿/**
+/**
  * GenericRestClient.ts
  * Author: David de Regt
  * Copyright: Microsoft 2015
@@ -6,11 +6,11 @@
  * Base client type for accessing RESTful services
  */
 
+import { defaults } from 'lodash';
 import * as SyncTasks from 'synctasks';
-import { defaults, isString } from 'lodash';
-import { WebRequestOptions, SimpleWebRequest, WebResponse, Headers } from './SimpleWebRequest';
+import { Headers, SendDataType, SimpleWebRequest, WebRequestOptions, WebResponse } from './SimpleWebRequest';
 
-export type HttpAction = 'POST'|'GET'|'PUT'|'DELETE'|'PATCH';
+export type HttpAction = 'POST' | 'GET' | 'PUT' | 'DELETE' | 'PATCH';
 
 export interface ApiCallOptions extends WebRequestOptions {
     backendUrl?: string;
@@ -43,14 +43,68 @@ export class GenericRestClient {
         this._endpointUrl = endpointUrl;
     }
 
-    protected _performApiCall<T>(apiPath: string, action: HttpAction, objToPost: any, givenOptions?: ApiCallOptions)
+    performApiGet<T>(apiPath: string, options?: ApiCallOptions): SyncTasks.Promise<T> {
+        return this
+            .performApiGetDetailed<T>(apiPath, options)
+            .then(resp => resp.body);
+    }
+
+    performApiGetDetailed<T>(apiPath: string, options?: ApiCallOptions): SyncTasks.Promise<WebResponse<T, ApiCallOptions>> {
+        return this._performApiCall<T>(apiPath, 'GET', undefined, options);
+    }
+
+    performApiPost<T>(apiPath: string, objToPost: SendDataType, options?: ApiCallOptions): SyncTasks.Promise<T> {
+        return this
+            .performApiPostDetailed<T>(apiPath, objToPost, options)
+            .then(resp => resp.body);
+    }
+
+    performApiPostDetailed<T>(apiPath: string, objToPost: SendDataType, options?: ApiCallOptions)
+            : SyncTasks.Promise<WebResponse<T, ApiCallOptions>> {
+        return this._performApiCall<T>(apiPath, 'POST', objToPost, options);
+    }
+
+    performApiPatch<T>(apiPath: string, objToPatch: SendDataType, options?: ApiCallOptions): SyncTasks.Promise<T> {
+        return this
+            .performApiPatchDetailed<T>(apiPath, objToPatch, options)
+            .then(resp => resp.body);
+    }
+
+    performApiPatchDetailed<T>(apiPath: string, objToPatch: SendDataType, options?: ApiCallOptions)
+            : SyncTasks.Promise<WebResponse<T, ApiCallOptions>> {
+        return this._performApiCall<T>(apiPath, 'PATCH', objToPatch, options);
+    }
+
+    performApiPut<T>(apiPath: string, objToPut: SendDataType, options?: ApiCallOptions): SyncTasks.Promise<T> {
+        return this
+            .performApiPutDetailed<T>(apiPath, objToPut, options)
+            .then(resp => resp.body);
+    }
+
+    performApiPutDetailed<T>(apiPath: string, objToPut: SendDataType, options?: ApiCallOptions)
+            : SyncTasks.Promise<WebResponse<T, ApiCallOptions>> {
+        return this._performApiCall<T>(apiPath, 'PUT', objToPut, options);
+    }
+
+    performApiDelete<T>(apiPath: string, objToDelete: SendDataType, options?: ApiCallOptions): SyncTasks.Promise<T> {
+        return this
+            .performApiDeleteDetailed<T>(apiPath, objToDelete, options)
+            .then(resp => resp.body);
+    }
+
+    performApiDeleteDetailed<T>(apiPath: string, objToDelete: SendDataType, options?: ApiCallOptions)
+            : SyncTasks.Promise<WebResponse<T, ApiCallOptions>> {
+        return this._performApiCall<T>(apiPath, 'DELETE', objToDelete, options);
+    }
+
+    protected _performApiCall<T>(apiPath: string, action: HttpAction, sendData?: SendDataType, givenOptions?: ApiCallOptions)
             : SyncTasks.Promise<WebResponse<T, ApiCallOptions>> {
 
-        let options = defaults<ApiCallOptions, ApiCallOptions, ApiCallOptions>({}, givenOptions || {}, this._defaultOptions);
-        if (objToPost) {
-            options.sendData = objToPost;
+        const options = defaults<ApiCallOptions, ApiCallOptions, ApiCallOptions>({}, givenOptions || {}, this._defaultOptions);
+        if (sendData) {
+            options.sendData = sendData;
         }
-        
+
         if (options.eTag) {
             if (!options.augmentHeaders) {
                 options.augmentHeaders = {};
@@ -59,16 +113,18 @@ export class GenericRestClient {
         }
 
         if (!options.contentType) {
-            options.contentType = isString(options.sendData) ? 'form' : 'json';
+            options.contentType = typeof options.sendData === 'string' ? 'form' : 'json';
         }
 
         const finalUrl = options.excludeEndpointUrl ? apiPath : this._endpointUrl + apiPath;
+        const getHeaders = () => this._getHeaders(options);
+        const blockRequestUntil = () => this._blockRequestUntil(options);
 
-        return new SimpleWebRequest<T, ApiCallOptions>(action, finalUrl, options, () => this._getHeaders(options), 
-                () => this._blockRequestUntil(options))
+        return new SimpleWebRequest<T, ApiCallOptions>(action, finalUrl, options, getHeaders, blockRequestUntil)
             .start()
             .then(response => {
                 this._processSuccessResponse<T>(response);
+
                 return response;
             });
     }
@@ -88,60 +144,5 @@ export class GenericRestClient {
     // Override this function to process any generic headers that come down with a successful response
     protected _processSuccessResponse<T>(resp: WebResponse<T, ApiCallOptions>): void {
         // No-op by default
-    }
-
-    performApiGet<T>(apiPath: string, options?: ApiCallOptions): SyncTasks.Promise<T> {
-        return this
-            .performApiGetDetailed<T>(apiPath, options)
-            .then(resp => resp.body);
-    }
-
-    performApiGetDetailed<T>(apiPath: string, options?: ApiCallOptions)
-            : SyncTasks.Promise<WebResponse<T, ApiCallOptions>> {
-        return this._performApiCall<T>(apiPath, 'GET', undefined, options);
-    }
-
-    performApiPost<T>(apiPath: string, objToPost: any, options?: ApiCallOptions): SyncTasks.Promise<T> {
-        return this
-            .performApiPostDetailed<T>(apiPath, objToPost, options)
-            .then(resp => resp.body);
-    }
-
-    performApiPostDetailed<T>(apiPath: string, objToPost: any, options?: ApiCallOptions)
-            : SyncTasks.Promise<WebResponse<T, ApiCallOptions>> {
-        return this._performApiCall<T>(apiPath, 'POST', objToPost, options);
-    }
-
-    performApiPatch<T>(apiPath: string, objToPatch: any, options?: ApiCallOptions): SyncTasks.Promise<T> {
-        return this
-            .performApiPatchDetailed<T>(apiPath, objToPatch, options)
-            .then(resp => resp.body);
-    }
-
-    performApiPatchDetailed<T>(apiPath: string, objToPatch: any, options?: ApiCallOptions)
-            : SyncTasks.Promise<WebResponse<T, ApiCallOptions>> {
-        return this._performApiCall<T>(apiPath, 'PATCH', objToPatch, options);
-    }
-
-    performApiPut<T>(apiPath: string, objToPut: any, options?: ApiCallOptions): SyncTasks.Promise<T> {
-        return this
-            .performApiPutDetailed<T>(apiPath, objToPut, options)
-            .then(resp => resp.body);
-    }
-
-    performApiPutDetailed<T>(apiPath: string, objToPut: any, options?: ApiCallOptions)
-            : SyncTasks.Promise<WebResponse<T, ApiCallOptions>> {
-        return this._performApiCall<T>(apiPath, 'PUT', objToPut, options);
-    }
-
-    performApiDelete<T>(apiPath: string, objToDelete?: any, options?: ApiCallOptions): SyncTasks.Promise<T> {
-        return this
-            .performApiDeleteDetailed<T>(apiPath, objToDelete, options)
-            .then(resp => resp.body);
-    }
-
-    performApiDeleteDetailed<T>(apiPath: string, objToDelete: any, options?: ApiCallOptions)
-            : SyncTasks.Promise<WebResponse<T, ApiCallOptions>> {
-        return this._performApiCall<T>(apiPath, 'DELETE', objToDelete, options);
     }
 }

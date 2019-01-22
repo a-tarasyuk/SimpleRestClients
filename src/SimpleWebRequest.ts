@@ -9,8 +9,8 @@
 import * as _ from 'lodash';
 import * as SyncTasks from 'synctasks';
 
-import { assert } from './utils';
 import { ExponentialTime } from './ExponentialTime';
+import { assert } from './utils';
 
 interface Dictionary<T> {
     [key: string]: T;
@@ -56,7 +56,7 @@ export enum WebRequestPriority {
     Low = 1,
     Normal = 2,
     High = 3,
-    Critical = 4
+    Critical = 4,
 }
 
 export enum ErrorHandlingType {
@@ -73,7 +73,7 @@ export enum ErrorHandlingType {
     RetryCountedWithBackoff,
 
     // Return this if you need to satisfy some condition before this request will retry (then call .resumeRetrying()).
-    PauseUntilResumed
+    PauseUntilResumed,
 }
 
 export interface NativeBlobFileData {
@@ -84,7 +84,7 @@ export interface NativeBlobFileData {
 }
 
 export interface NativeFileData {
-    file: NativeBlobFileData|File;
+    file: NativeBlobFileData | File;
 }
 
 export interface XMLHttpRequestProgressEvent extends ProgressEvent {
@@ -111,15 +111,14 @@ export interface WebRequestOptions {
 
     // Used instead of calling getHeaders.
     overrideGetHeaders?: Headers;
+
     // Overrides all other headers.
     augmentHeaders?: Headers;
 
-    streamingDownloadProgress?: (responseText: string) => void;
-
-    onProgress?: (progressEvent: XMLHttpRequestProgressEvent) => void;
-
-    customErrorHandler?: (webRequest: SimpleWebRequestBase, errorResponse: WebErrorResponse) => ErrorHandlingType;
-    augmentErrorResponse?: (resp: WebErrorResponse) => void;
+    streamingDownloadProgress?(responseText: string): void;
+    onProgress?(progressEvent: XMLHttpRequestProgressEvent): void;
+    customErrorHandler?(webRequest: SimpleWebRequestBase, errorResponse: WebErrorResponse): ErrorHandlingType;
+    augmentErrorResponse?(resp: WebErrorResponse): void;
 }
 
 function isJsonContentType(ct: string) {
@@ -135,7 +134,7 @@ function isFormDataContentType(ct: string) {
 }
 
 export const DefaultOptions: WebRequestOptions = {
-    priority: WebRequestPriority.Normal
+    priority: WebRequestPriority.Normal,
 };
 
 export interface ISimpleWebRequestOptions {
@@ -147,8 +146,8 @@ export interface ISimpleWebRequestOptions {
     HungRequestCleanupIntervalMs: number;
 
     // Use this to shim calls to setTimeout/clearTimeout with any other service/local function you want.
-    setTimeout: (callback: () => void, timeoutMs?: number) => number;
-    clearTimeout: (id: number) => void;
+    setTimeout(callback: () => void, timeoutMs?: number): number;
+    clearTimeout(id: number): void;
 }
 
 export let SimpleWebRequestOptions: ISimpleWebRequestOptions = {
@@ -156,7 +155,7 @@ export let SimpleWebRequestOptions: ISimpleWebRequestOptions = {
     HungRequestCleanupIntervalMs: 10000,
 
     setTimeout: (callback: () => void, timeoutMs?: number) => window.setTimeout(callback, timeoutMs),
-    clearTimeout: (id: number) => window.clearTimeout(id)
+    clearTimeout: (id: number) => window.clearTimeout(id),
 };
 
 export function DefaultErrorHandler(webRequest: SimpleWebRequestBase, errResp: WebTransportErrorResponse) {
@@ -171,11 +170,11 @@ export function DefaultErrorHandler(webRequest: SimpleWebRequestBase, errResp: W
 }
 
 // Note: The ordering of this enum is used for detection logic
-const enum FeatureSupportStatus {
+enum FeatureSupportStatus {
     Unknown,
     Detecting,
     NotSupported,
-    Supported
+    Supported,
 }
 
 // List of pending requests, sorted from most important to least important (numerically descending)
@@ -197,7 +196,12 @@ export abstract class SimpleWebRequestBase<TOptions extends WebRequestOptions = 
     protected _xhr: XMLHttpRequest | undefined;
     protected _xhrRequestHeaders: Headers | undefined;
     protected _requestTimeoutTimer: number | undefined;
+
+    protected _action: string;
+    protected _url: string;
     protected _options: TOptions;
+    protected _getHeaders?: () => Headers | undefined;
+    protected _blockRequestUntil?: () => SyncTasks.Promise<void> | undefined;
 
     protected _aborted = false;
     protected _timedOut = false;
@@ -209,300 +213,31 @@ export abstract class SimpleWebRequestBase<TOptions extends WebRequestOptions = 
     // 2. Safari seems to have a bug where sometimes it double-resolves happily-completed xmlhttprequests
     protected _finishHandled = false;
 
-    protected _retryTimer: number|undefined;
+    protected _retryTimer: number | undefined;
     protected _retryExponentialTime = new ExponentialTime(1000, 300000);
 
-    constructor(protected _action: string,
-            protected _url: string, options: TOptions,
-            protected _getHeaders?: () => Headers,
-            protected _blockRequestUntil?: () => SyncTasks.Promise<void>|undefined) {
+    constructor(action: string,
+                url: string,
+                options: TOptions,
+                getHeaders?: () => Headers,
+                blockRequestUntil?: () => SyncTasks.Promise<void>) {
+        this._action = action;
+        this._url = url;
         this._options = _.defaults(options, DefaultOptions);
-    }
-
-    getPriority(): WebRequestPriority {
-        return this._options.priority || WebRequestPriority.DontCare;
-    }
-
-    abstract abort(): void;
-
-    protected static checkQueueProcessing() {
-        while (requestQueue.length > 0 && executingList.length < SimpleWebRequestOptions.MaxSimultaneousRequests) {
-            const req = requestQueue.shift()!!!;
-            blockedList.push(req);
-            const blockPromise = (req._blockRequestUntil && req._blockRequestUntil()) || SyncTasks.Resolved();
-            blockPromise.finally(() => {
-                _.remove(blockedList, req);
-            }).then(() => {
-                if (executingList.length < SimpleWebRequestOptions.MaxSimultaneousRequests && !req._aborted) {
-                    executingList.push(req);
-                    SimpleWebRequest._scheduleHungRequestCleanupIfNeeded();
-                    req._fire();
-                } else {
-                    req._enqueue();
-                }
-            }, err => {
-                // fail the request if the block promise is rejected
-                req._respond('_blockRequestUntil rejected: ' + err);
-            });
-        }
-    }
-
-    private static _scheduleHungRequestCleanupIfNeeded() {
-        // Schedule a cleanup timer if needed
-        if (executingList.length > 0 && hungRequestCleanupTimer === undefined) {
-            hungRequestCleanupTimer = SimpleWebRequestOptions.setTimeout(this._hungRequestCleanupTimerCallback,
-                SimpleWebRequestOptions.HungRequestCleanupIntervalMs);
-        } else if (executingList.length === 0 && hungRequestCleanupTimer) {
-            SimpleWebRequestOptions.clearTimeout(hungRequestCleanupTimer);
-            hungRequestCleanupTimer = undefined;
-        }
-    }
-
-    private static _hungRequestCleanupTimerCallback = () => {
-        hungRequestCleanupTimer = undefined;
-        executingList.filter(request => {
-            if (request._xhr && request._xhr.readyState === 4) {
-                console.warn('SimpleWebRequests found a completed XHR that hasn\'t invoked it\'s callback functions, manually responding');
-                return true;
-            }
-            return false;
-        }).forEach(request => {
-            // We need to respond outside of the initial iteration across the array since _respond mutates exeutingList
-            request._respond();
-        });
-
-        SimpleWebRequest._scheduleHungRequestCleanupIfNeeded();
-    }
-
-    protected _removeFromQueue(): void {
-        // Only pull from request queue and executing queue here - pulling from the blocked queue can result in requests
-        // being queued up multiple times if _respond fires more than once (it shouldn't, but does happen in the wild)
-        _.remove(executingList, this);
-        _.remove(requestQueue, this);
-    }
-
-    protected _assertAndClean(expression: any, message: string): void {
-        if (!expression) {
-            this._removeFromQueue();
-            console.error(message);
-            assert(expression, message);
-        }
-    }
-
-    // TSLint thinks that this function is unused.  Silly tslint.
-    // tslint:disable-next-line
-    private _fire(): void {
-        this._xhr = new XMLHttpRequest();
-        this._xhrRequestHeaders = {};
-
-        // xhr.open() can throw an exception for a CSP violation.
-        const openError = _.attempt(() => {
-            // Apparently you're supposed to open the connection before adding events to it.  If you don't, the node.js implementation
-            // of XHR actually calls this.abort() at the start of open()...  Bad implementations, hooray.
-            this._xhr!!!.open(this._action, this._url, true);
-        });
-
-        if (openError) {
-            this._respond(openError.toString());
-            return;
-        }
-
-        if (this._options.timeout) {
-            const timeoutSupported = timeoutSupportStatus;
-             // Use manual timer if we don't know about timeout support
-            if (timeoutSupported !== FeatureSupportStatus.Supported) {
-                this._assertAndClean(!this._requestTimeoutTimer, 'Double-fired requestTimeoutTimer');
-                this._requestTimeoutTimer = SimpleWebRequestOptions.setTimeout(() => {
-                    this._requestTimeoutTimer = undefined;
-
-                    this._timedOut = true;
-                    this.abort();
-                }, this._options.timeout);
-            }
-
-            // This is our first completed request. Use it for feature detection
-            if (timeoutSupported === FeatureSupportStatus.Supported || timeoutSupported <= FeatureSupportStatus.Detecting) {
-                // timeout and ontimeout are part of the XMLHttpRequest Level 2 spec, should be supported in most modern browsers
-                this._xhr.timeout = this._options.timeout;
-                this._xhr.ontimeout = () => {
-                    timeoutSupportStatus = FeatureSupportStatus.Supported;
-                    if (timeoutSupported !== FeatureSupportStatus.Supported) {
-                    // When this request initially fired we didn't know about support, bail & let the fallback method handle this
-                        return;
-                    }
-                    this._timedOut = true;
-                    // Set aborted flag to match simple timer approach, which aborts the request and results in an _respond call
-                    this._aborted = true;
-                    this._respond('TimedOut');
-                };
-            }
-        }
-
-        const onLoadErrorSupported = onLoadErrorSupportStatus;
-
-        // Use onreadystatechange if we don't know about onload support or it onload is not supported
-        if (onLoadErrorSupported !== FeatureSupportStatus.Supported) {
-            if (onLoadErrorSupported === FeatureSupportStatus.Unknown) {
-                // Set global status to detecting, leave local state so we can set a timer on finish
-                onLoadErrorSupportStatus = FeatureSupportStatus.Detecting;
-            }
-            this._xhr.onreadystatechange = (e) => {
-                if (!this._xhr) {
-                    return;
-                }
-
-                if (this._xhr.readyState === 3 && this._options.streamingDownloadProgress && !this._aborted) {
-                    // This callback may result in cancelling the connection, so keep that in mind with any handling after it
-                    // if we decide to stop using the return after this someday down the line.  i.e. this._xhr may be undefined
-                    // when we come back from this call.
-                    this._options.streamingDownloadProgress(this._xhr.responseText);
-                    return;
-                }
-
-                if (this._xhr.readyState !== 4) {
-                    // Wait for it to finish
-                    return;
-                }
-
-                // This is the first request completed (unknown status when fired, detecting now), use it for detection
-                if (onLoadErrorSupported === FeatureSupportStatus.Unknown &&
-                        onLoadErrorSupportStatus === FeatureSupportStatus.Detecting) {
-                    // If onload hasn't fired within 10 seconds of completion, detect as not supported
-                    SimpleWebRequestOptions.setTimeout(() => {
-                        if (onLoadErrorSupportStatus !== FeatureSupportStatus.Supported) {
-                            onLoadErrorSupportStatus = FeatureSupportStatus.NotSupported;
-                        }
-                    }, 10000);
-                }
-
-                this._respond();
-            };
-        } else if (this._options.streamingDownloadProgress) {
-            // If we support onload and such, but have a streaming download handler, still trap the oRSC.
-            this._xhr.onreadystatechange = (e) => {
-                if (!this._xhr) {
-                    return;
-                }
-
-                if (this._xhr.readyState === 3 && this._options.streamingDownloadProgress && !this._aborted) {
-                    // This callback may result in cancelling the connection, so keep that in mind with any handling after it
-                    // if we decide to stop using the return after this someday down the line.  i.e. this._xhr may be undefined
-                    // when we come back from this call.
-                    this._options.streamingDownloadProgress(this._xhr.responseText);
-                }
-            };
-        }
-
-        if (onLoadErrorSupported !== FeatureSupportStatus.NotSupported) {
-            // onLoad and onError are part of the XMLHttpRequest Level 2 spec, should be supported in most modern browsers
-            this._xhr.onload = () => {
-                onLoadErrorSupportStatus = FeatureSupportStatus.Supported;
-                if (onLoadErrorSupported !== FeatureSupportStatus.Supported) {
-                    // When this request initially fired we didn't know about support, bail & let the fallback method handle this
-                    return;
-                }
-                this._respond();
-            };
-            this._xhr.onerror = () => {
-                onLoadErrorSupportStatus = FeatureSupportStatus.Supported;
-                if (onLoadErrorSupported !== FeatureSupportStatus.Supported) {
-                    // When this request initially fired we didn't know about support, bail & let the fallback method handle this
-                    return;
-                }
-                this._respond();
-            };
-        }
-
-        this._xhr.onabort = (e) => {
-            // If the browser cancels us (page navigation or whatever), it sometimes calls both the readystatechange and this,
-            // so make sure we know that this is an abort.
-            this._aborted = true;
-
-            this._respond('Aborted');
-        };
-
-        if (this._xhr.upload && this._options.onProgress) {
-            this._xhr.upload.onprogress = this._options.onProgress as (ev: ProgressEvent) => void;
-        }
-
-        const acceptType = this._options.acceptType || 'json';
-        const responseType = SimpleWebRequestBase._getResponseType(acceptType);
-
-        const responseTypeError = _.attempt(() => {
-            this._xhr!!!.responseType = responseType;
-        });
-
-        if (responseTypeError) {
-            // WebKit added support for the json responseType value on 09/03/2013
-            // https://bugs.webkit.org/show_bug.cgi?id=73648.
-            // Versions of Safari prior to 7 and Android 4 Samsung borwsers are
-            // known to throw an Error when setting the value "json" as the response type.
-            //
-            // The json response type can be ignored if not supported, because JSON payloads
-            // are handled by mapBody anyway
-            if (responseType !== 'json') {
-                throw responseTypeError;
-            }
-        }
-
-        SimpleWebRequest._setRequestHeader(this._xhr, this._xhrRequestHeaders, 'Accept', SimpleWebRequestBase.mapContentType(acceptType));
-
-        this._xhr.withCredentials = !!this._options.withCredentials;
-
-        const nextHeaders = this.getRequestHeaders();
-        // check/process headers
-        let headersCheck: Dictionary<boolean> = {};
-
-        Object.keys(nextHeaders).forEach(key => {
-            const value = nextHeaders[key];
-            const headerLower = key.toLowerCase();
-
-            if (headerLower === 'content-type') {
-                this._assertAndClean(false, `Don't set Content-Type with options.headers -- use it with the options.contentType property`);
-                return;
-            }
-
-            if (headerLower === 'accept') {
-                this._assertAndClean(false, `Don't set Accept with options.headers -- use it with the options.acceptType property`);
-                return;
-            }
-
-            this._assertAndClean(!headersCheck[headerLower], `Setting duplicate header key: ${ headersCheck[headerLower] } and ${ key }`);
-
-            if (value === undefined || value === null) {
-                console.warn(`Tried to set header "${ key }" on request with "${ value }" value, header will be dropped`);
-                return;
-            }
-
-            headersCheck[headerLower] = true;
-
-            SimpleWebRequest._setRequestHeader(this._xhr!!!, this._xhrRequestHeaders!!!, key, value);
-        });
-
-        if (this._options.sendData) {
-            const contentType = SimpleWebRequestBase.mapContentType(this._options.contentType || 'json');
-            SimpleWebRequest._setRequestHeader(this._xhr, this._xhrRequestHeaders, 'Content-Type', contentType);
-
-            const sendData = SimpleWebRequestBase.mapBody(this._options.sendData, contentType);
-            this._xhr.send(sendData as BodyInit);
-        } else {
-            this._xhr.send();
-        }
-    }
-
-    private static _setRequestHeader(xhr: XMLHttpRequest, xhrRequestHeaders: Headers, key: string, val: string): void {
-        xhr.setRequestHeader(key, val);
-        xhrRequestHeaders[key] = val;
+        this._getHeaders = getHeaders;
+        this._blockRequestUntil = blockRequestUntil;
     }
 
     static mapContentType(contentType: string): string {
         if (contentType === 'json') {
             return 'application/json';
-        } else if (contentType === 'form') {
-            return 'application/x-www-form-urlencoded';
-        } else {
-            return contentType;
         }
+
+        if (contentType === 'form') {
+            return 'application/x-www-form-urlencoded';
+        }
+
+        return contentType;
     }
 
     static mapBody(sendData: SendDataType, contentType: string): SendDataType {
@@ -514,6 +249,7 @@ export abstract class SimpleWebRequestBase<TOptions extends WebRequestOptions = 
             if (!_.isString(sendData) && _.isObject(sendData)) {
                 const params = _.map(sendData as Params, (val, key) =>
                     encodeURIComponent(key) + (val ? '=' + encodeURIComponent(val.toString()) : ''));
+
                 return params.join('&');
             }
         } else if (isFormDataContentType(contentType)) {
@@ -533,6 +269,92 @@ export abstract class SimpleWebRequestBase<TOptions extends WebRequestOptions = 
 
         return sendData;
     }
+
+    protected static checkQueueProcessing() {
+        while (requestQueue.length > 0 && executingList.length < SimpleWebRequestOptions.MaxSimultaneousRequests) {
+            const req = requestQueue.shift()!!!;
+            blockedList.push(req);
+
+            const blockPromise = (req._blockRequestUntil && req._blockRequestUntil()) || SyncTasks.Resolved();
+            blockPromise
+                .finally(() => {
+                    _.remove(blockedList, req);
+                })
+                .then(() => {
+                    if (executingList.length < SimpleWebRequestOptions.MaxSimultaneousRequests && !req._aborted) {
+                        executingList.push(req);
+                        SimpleWebRequest._scheduleHungRequestCleanupIfNeeded();
+                        req._fire();
+                    } else {
+                        req._enqueue();
+                    }
+                }, err => {
+                    // fail the request if the block promise is rejected
+                    req._respond(`_blockRequestUntil rejected: ${ err }`);
+                });
+        }
+    }
+
+    private static _getResponseType(acceptType: string): XMLHttpRequestResponseType {
+        if (acceptType === 'blob') {
+            return 'arraybuffer';
+        }
+
+        if (acceptType === 'text/xml' || acceptType === 'application/xml') {
+            return 'document';
+        }
+
+        if (acceptType === 'text/plain') {
+            return 'text';
+        }
+
+        return 'json';
+    }
+
+    private static _setRequestHeader(xhr: XMLHttpRequest, xhrRequestHeaders: Headers, key: string, val: string): void {
+        xhr.setRequestHeader(key, val);
+        xhrRequestHeaders[key] = val;
+    }
+
+    private static _scheduleHungRequestCleanupIfNeeded() {
+        // Schedule a cleanup timer if needed
+        if (executingList.length > 0 && hungRequestCleanupTimer === undefined) {
+            hungRequestCleanupTimer = SimpleWebRequestOptions.setTimeout(this._hungRequestCleanupTimerCallback,
+                SimpleWebRequestOptions.HungRequestCleanupIntervalMs);
+        } else if (executingList.length === 0 && hungRequestCleanupTimer) {
+            SimpleWebRequestOptions.clearTimeout(hungRequestCleanupTimer);
+            hungRequestCleanupTimer = undefined;
+        }
+    }
+
+    private static readonly _hungRequestCleanupTimerCallback = () => {
+        hungRequestCleanupTimer = undefined;
+
+        executingList
+            .filter(request => {
+                if (request._xhr && request._xhr.readyState === 4) {
+                    console.warn(
+                        'SimpleWebRequests found a completed XHR that hasn\'t invoked it\'s callback functions, manually responding'
+                    );
+
+                    return true;
+                }
+
+                return false;
+            })
+            .forEach(request => {
+                // We need to respond outside of the initial iteration across the array since _respond mutates exeutingList
+                request._respond();
+            });
+
+        SimpleWebRequest._scheduleHungRequestCleanupIfNeeded();
+    }
+
+    getPriority(): WebRequestPriority {
+        return this._options.priority || WebRequestPriority.DontCare;
+    }
+
+    abstract abort(): void;
 
     setUrl(newUrl: string): void {
         this._url = newUrl;
@@ -600,11 +422,29 @@ export abstract class SimpleWebRequestBase<TOptions extends WebRequestOptions = 
     resumeRetrying(): void {
         if (!this._paused) {
             assert(false, 'resumeRetrying() called but not paused!');
+
             return;
         }
 
         this._paused = false;
         this._enqueue();
+    }
+
+    protected abstract _respond(errorStatusText?: string): void;
+
+    protected _removeFromQueue(): void {
+        // Only pull from request queue and executing queue here - pulling from the blocked queue can result in requests
+        // being queued up multiple times if _respond fires more than once (it shouldn't, but does happen in the wild)
+        _.remove(executingList, this);
+        _.remove(requestQueue, this);
+    }
+
+    protected _assertAndClean(expression: boolean, message: string): void {
+        if (!expression) {
+            this._removeFromQueue();
+            console.error(message);
+            assert(expression, message);
+        }
     }
 
     protected _enqueue(): void {
@@ -639,37 +479,233 @@ export abstract class SimpleWebRequestBase<TOptions extends WebRequestOptions = 
         SimpleWebRequestBase.checkQueueProcessing();
     }
 
-    private static _getResponseType(acceptType: string): XMLHttpRequestResponseType {
-        if (acceptType === 'blob') {
-            return 'arraybuffer';
+    // TSLint thinks that this function is unused. Silly tslint.
+    // tslint:disable-next-line
+    private _fire(): void {
+        this._xhr = new XMLHttpRequest();
+        this._xhrRequestHeaders = {};
+
+        // xhr.open() can throw an exception for a CSP violation.
+        const openError = _.attempt(() => {
+            // Apparently you're supposed to open the connection before adding events to it.  If you don't, the node.js implementation
+            // of XHR actually calls this.abort() at the start of open()...  Bad implementations, hooray.
+            this._xhr!!!.open(this._action, this._url, true);
+        });
+
+        if (openError) {
+            this._respond(openError.toString());
+
+            return;
         }
 
-        if (acceptType === 'text/xml' || acceptType === 'application/xml') {
-            return 'document';
+        if (this._options.timeout) {
+            const timeoutSupported = timeoutSupportStatus;
+             // Use manual timer if we don't know about timeout support
+            if (timeoutSupported !== FeatureSupportStatus.Supported) {
+                this._assertAndClean(!this._requestTimeoutTimer, 'Double-fired requestTimeoutTimer');
+                this._requestTimeoutTimer = SimpleWebRequestOptions.setTimeout(() => {
+                    this._requestTimeoutTimer = undefined;
+                    this._timedOut = true;
+
+                    this.abort();
+                }, this._options.timeout);
+            }
+
+            // This is our first completed request. Use it for feature detection
+            if (timeoutSupported === FeatureSupportStatus.Supported || timeoutSupported <= FeatureSupportStatus.Detecting) {
+                // timeout and ontimeout are part of the XMLHttpRequest Level 2 spec, should be supported in most modern browsers
+                this._xhr.timeout = this._options.timeout;
+                this._xhr.ontimeout = () => {
+                    timeoutSupportStatus = FeatureSupportStatus.Supported;
+                    if (timeoutSupported !== FeatureSupportStatus.Supported) {
+                    // When this request initially fired we didn't know about support, bail & let the fallback method handle this
+                        return;
+                    }
+                    this._timedOut = true;
+                    // Set aborted flag to match simple timer approach, which aborts the request and results in an _respond call
+                    this._aborted = true;
+                    this._respond('TimedOut');
+                };
+            }
         }
 
-        if (acceptType === 'text/plain') {
-            return 'text';
+        const onLoadErrorSupported = onLoadErrorSupportStatus;
+
+        // Use onreadystatechange if we don't know about onload support or it onload is not supported
+        if (onLoadErrorSupported !== FeatureSupportStatus.Supported) {
+            if (onLoadErrorSupported === FeatureSupportStatus.Unknown) {
+                // Set global status to detecting, leave local state so we can set a timer on finish
+                onLoadErrorSupportStatus = FeatureSupportStatus.Detecting;
+            }
+            this._xhr.onreadystatechange = (e) => {
+                if (!this._xhr) {
+                    return;
+                }
+
+                if (this._xhr.readyState === 3 && this._options.streamingDownloadProgress && !this._aborted) {
+                    // This callback may result in cancelling the connection, so keep that in mind with any handling after it
+                    // if we decide to stop using the return after this someday down the line.  i.e. this._xhr may be undefined
+                    // when we come back from this call.
+                    this._options.streamingDownloadProgress(this._xhr.responseText);
+
+                    return;
+                }
+
+                if (this._xhr.readyState !== 4) {
+                    // Wait for it to finish
+                    return;
+                }
+
+                // This is the first request completed (unknown status when fired, detecting now), use it for detection
+                if (onLoadErrorSupported === FeatureSupportStatus.Unknown &&
+                        onLoadErrorSupportStatus === FeatureSupportStatus.Detecting) {
+                    // If onload hasn't fired within 10 seconds of completion, detect as not supported
+                    SimpleWebRequestOptions.setTimeout(() => {
+                        if (onLoadErrorSupportStatus !== FeatureSupportStatus.Supported) {
+                            onLoadErrorSupportStatus = FeatureSupportStatus.NotSupported;
+                        }
+                    }, 10000);
+                }
+
+                this._respond();
+            };
+        } else if (this._options.streamingDownloadProgress) {
+            // If we support onload and such, but have a streaming download handler, still trap the oRSC.
+            this._xhr.onreadystatechange = (e) => {
+                if (!this._xhr) {
+                    return;
+                }
+
+                if (this._xhr.readyState === 3 && this._options.streamingDownloadProgress && !this._aborted) {
+                    // This callback may result in cancelling the connection, so keep that in mind with any handling after it
+                    // if we decide to stop using the return after this someday down the line.  i.e. this._xhr may be undefined
+                    // when we come back from this call.
+                    this._options.streamingDownloadProgress(this._xhr.responseText);
+                }
+            };
         }
 
-        return 'json';
+        if (onLoadErrorSupported !== FeatureSupportStatus.NotSupported) {
+            // onLoad and onError are part of the XMLHttpRequest Level 2 spec, should be supported in most modern browsers
+            this._xhr.onload = () => {
+                onLoadErrorSupportStatus = FeatureSupportStatus.Supported;
+                if (onLoadErrorSupported !== FeatureSupportStatus.Supported) {
+                    // When this request initially fired we didn't know about support, bail & let the fallback method handle this
+                    return;
+                }
+                this._respond();
+            };
+            this._xhr.onerror = () => {
+                onLoadErrorSupportStatus = FeatureSupportStatus.Supported;
+                if (onLoadErrorSupported !== FeatureSupportStatus.Supported) {
+                    // When this request initially fired we didn't know about support, bail & let the fallback method handle this
+                    return;
+                }
+                this._respond();
+            };
+        }
+
+        this._xhr.onabort = (e) => {
+            // If the browser cancels us (page navigation or whatever), it sometimes calls both the readystatechange and this,
+            // so make sure we know that this is an abort.
+            this._aborted = true;
+
+            this._respond('Aborted');
+        };
+
+        if (this._xhr.upload && this._options.onProgress) {
+            this._xhr.upload.onprogress = this._options.onProgress;
+        }
+
+        const acceptType = this._options.acceptType || 'json';
+        const responseType = SimpleWebRequestBase._getResponseType(acceptType);
+
+        const responseTypeError = _.attempt(() => {
+            this._xhr!!!.responseType = responseType;
+        });
+
+        if (responseTypeError) {
+            // WebKit added support for the json responseType value on 09/03/2013
+            // https://bugs.webkit.org/show_bug.cgi?id=73648.
+            // Versions of Safari prior to 7 and Android 4 Samsung borwsers are
+            // known to throw an Error when setting the value "json" as the response type.
+            //
+            // The json response type can be ignored if not supported, because JSON payloads
+            // are handled by mapBody anyway
+            if (responseType !== 'json') {
+                throw responseTypeError;
+            }
+        }
+
+        SimpleWebRequest._setRequestHeader(this._xhr, this._xhrRequestHeaders, 'Accept', SimpleWebRequestBase.mapContentType(acceptType));
+
+        this._xhr.withCredentials = !!this._options.withCredentials;
+
+        const nextHeaders = this.getRequestHeaders();
+        // check/process headers
+        let headersCheck: Dictionary<boolean> = {};
+
+        Object.keys(nextHeaders)
+            .forEach(key => {
+                const value = nextHeaders[key];
+                const headerLower = key.toLowerCase();
+
+                if (headerLower === 'content-type') {
+                    this._assertAndClean(false,
+                        `Don't set Content-Type with options.headers -- use it with the options.contentType property`);
+
+                    return;
+                }
+
+                if (headerLower === 'accept') {
+                    this._assertAndClean(false,
+                        `Don't set Accept with options.headers -- use it with the options.acceptType property`);
+
+                    return;
+                }
+
+                this._assertAndClean(!headersCheck[headerLower],
+                    `Setting duplicate header key: ${ headersCheck[headerLower] } and ${ key }`);
+
+                if (value === undefined || value === null) {
+                    console.warn(`Tried to set header "${ key }" on request with "${ value }" value, header will be dropped`);
+
+                    return;
+                }
+
+                headersCheck[headerLower] = true;
+
+                SimpleWebRequest._setRequestHeader(this._xhr, this._xhrRequestHeaders, key, value);
+            });
+
+        if (this._options.sendData) {
+            const contentType = SimpleWebRequestBase.mapContentType(this._options.contentType || 'json');
+            SimpleWebRequest._setRequestHeader(this._xhr, this._xhrRequestHeaders, 'Content-Type', contentType);
+
+            const sendData = SimpleWebRequestBase.mapBody(this._options.sendData, contentType);
+            this._xhr.send(sendData as BodyInit);
+        } else {
+            this._xhr.send();
+        }
     }
-
-    protected abstract _respond(errorStatusText?: string): void;
 }
 
 export class SimpleWebRequest<TBody, TOptions extends WebRequestOptions = WebRequestOptions> extends SimpleWebRequestBase<TOptions> {
 
     private _deferred: SyncTasks.Deferred<WebResponse<TBody, TOptions>>;
 
-    constructor(action: string, url: string, options: TOptions, getHeaders?: () => Headers,
-            blockRequestUntil?: () => SyncTasks.Promise<void>|undefined) {
+    constructor(action: string,
+                url: string,
+                options: TOptions,
+                getHeaders?: () => Headers,
+                blockRequestUntil?: () => SyncTasks.Promise<void> | undefined) {
         super(action, url, options, getHeaders, blockRequestUntil);
     }
 
     abort(): void {
         if (this._aborted) {
-            assert(false, 'Already aborted ' + this._action + ' request to ' + this._url);
+            assert(false, `Already aborted ${ this._action } request to ${ this._url }`);
+
             return;
         }
 
@@ -687,6 +723,7 @@ export class SimpleWebRequest<TBody, TOptions extends WebRequestOptions = WebReq
 
         if (!this._deferred) {
             assert(false, 'Haven\'t even fired start() yet -- can\'t abort');
+
             return;
         }
 
@@ -702,6 +739,7 @@ export class SimpleWebRequest<TBody, TOptions extends WebRequestOptions = WebReq
     start(): SyncTasks.Promise<WebResponse<TBody, TOptions>> {
         if (this._deferred) {
             assert(false, 'WebRequest already started');
+
             return SyncTasks.Rejected('WebRequest already started');
         }
 
@@ -847,7 +885,7 @@ export class SimpleWebRequest<TBody, TOptions extends WebRequestOptions = WebReq
 
             if (retry) {
                 if (handleResponse === ErrorHandlingType.RetryCountedWithBackoff) {
-                    this._options.retries!!!--;
+                    this._options.retries = this._options.retries - 1;
                 }
 
                 if (this._requestTimeoutTimer) {
@@ -860,12 +898,12 @@ export class SimpleWebRequest<TBody, TOptions extends WebRequestOptions = WebReq
 
                 // Clear the XHR since we technically just haven't started again yet...
                 if (this._xhr) {
-                    this._xhr.onabort = null;
-                    this._xhr.onerror = null;
-                    this._xhr.onload = null;
-                    this._xhr.onprogress = null;
-                    this._xhr.onreadystatechange = null;
-                    this._xhr.ontimeout = null;
+                    this._xhr.onabort = undefined;
+                    this._xhr.onerror = undefined;
+                    this._xhr.onload = undefined;
+                    this._xhr.onprogress = undefined;
+                    this._xhr.onreadystatechange = undefined;
+                    this._xhr.ontimeout = undefined;
                     this._xhr = undefined;
 
                     this._xhrRequestHeaders = undefined;

@@ -8,6 +8,7 @@
     "clean": "rimraf dist",
     "build": "npm run tslint && tsc",
     "tslint": "tslint --project tsconfig.json -r tslint.json --fix || true",
+    "lint": "tslint --project tsconfig.json -r tslint.json",
     "test": "npm run clean && karma start --singleRun",
     "test:watch": "npm run clean && karma start",
     "test:browser": "npm run clean && karma start --browsers=Chrome --single-run=false --auto-watch"

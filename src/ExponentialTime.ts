@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ExponentialTime.ts
  * Author: David de Regt
  * Copyright: Microsoft 2016
@@ -15,21 +15,31 @@ export class ExponentialTime {
     private _currentTime: number;
     private _incrementCount: number;
 
+    private readonly _initialTime: number;
+    private readonly _maxTime: number;
+    private readonly _growFactor: number;
+    private readonly _jitterFactor: number;
+
     /**
      * @param initialTime  multiplier of exponent
      * @param maxTime      delays won't be greater than this
      * @param growFactor   base of exponent
-     * @param jitterFactor
+     * @param jitterFactor Jitter factor
      */
-    constructor(private _initialTime: number,
-            private _maxTime: number,
-            private _growFactor = DEFAULT_TIME_GROW_FACTOR,
-            private _jitterFactor = DEFAULT_TIME_JITTER) {
+    constructor(initialTime: number,
+                maxTime: number,
+                growFactor = DEFAULT_TIME_GROW_FACTOR,
+                jitterFactor = DEFAULT_TIME_JITTER) {
 
-        assert(this._initialTime > 0, 'Initial delay must be positive');
-        assert(this._maxTime > 0, 'Delay upper bound must be positive');
-        assert(this._growFactor >= 0, 'Ratio must be non-negative');
-        assert(this._jitterFactor >= 0, 'Jitter factor must be non-negative');
+        assert(initialTime > 0, 'Initial delay must be positive');
+        assert(maxTime > 0, 'Delay upper bound must be positive');
+        assert(growFactor >= 0, 'Ratio must be non-negative');
+        assert(jitterFactor >= 0, 'Jitter factor must be non-negative');
+
+        this._initialTime = initialTime;
+        this._maxTime = maxTime;
+        this._growFactor = growFactor;
+        this._jitterFactor = jitterFactor;
 
         this.reset();
     }
@@ -38,7 +48,7 @@ export class ExponentialTime {
         this._incrementCount = 0;
 
         // Differ from java impl -- give it some initial jitter
-        this._currentTime = Math.round(this._initialTime * (1 + Math.random() * this._jitterFactor));
+        this._currentTime = Math.round(this._initialTime * (Math.random() * this._jitterFactor + 1));
     }
 
     getTime(): number {
@@ -70,7 +80,8 @@ export class ExponentialTime {
             this._currentTime = this._maxTime;
         }
 
-        this._incrementCount++;
+        this._incrementCount = this._incrementCount + 1;
+
         return this._currentTime;
     }
 
@@ -78,8 +89,9 @@ export class ExponentialTime {
      * @return first call returns initialTime, next calls will return initialTime*growFactor^n + jitter
      */
     getTimeAndCalculateNext(): number {
-        const res = this.getTime();
+        const time = this.getTime();
         this.calculateNext();
-        return res;
+
+        return time;
     }
 }
